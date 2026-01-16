@@ -1,61 +1,53 @@
 const API_URL = "https://torre-api.vitoreduardo03.workers.dev";
 
-/* ============================
+/* =======================================================
    ESTADO GLOBAL
-============================ */
+======================================================= */
 let modoMultiplo = false;
-let cardSelecionado = null;
 let turnoSelecionado = null;
+let cardSelecionado = null;
 let turnosSelecionados = [];
+let funcaoAtual = null;
+let intervaloAutoUpdate = null;
+let travaEnvio = {};
 
-/* ============================
-   RESET TOTAL
-============================ */
-function resetSelecao() {
-  cardSelecionado = null;
+/* =======================================================
+   TOGGLE MODO MÚLTIPLO
+======================================================= */
+function alternarModoMultiplo(checkbox) {
+  modoMultiplo = checkbox.checked;
+
   turnoSelecionado = null;
+  cardSelecionado = null;
   turnosSelecionados = [];
 
   document.querySelectorAll(".turno-card").forEach(card => {
     card.classList.remove("selecionado");
-    const btn = card.querySelector(".btn-inscrever-card");
-    if (btn) btn.remove();
+    card.querySelector(".btn-inscrever-card")?.remove();
   });
+
+  document
+    .getElementById("barra-multipla")
+    .classList.toggle("hidden", !modoMultiplo);
 }
 
-/* ============================
-   TOGGLE MODO MÚLTIPLO
-============================ */
-function alternarModoMultiplo(checkbox) {
-  modoMultiplo = checkbox.checked;
-
-  resetSelecao();
-
-  const barra = document.getElementById("barra-multipla");
-
-  if (modoMultiplo) {
-    barra.classList.remove("hidden");
-  } else {
-    barra.classList.add("hidden");
-  }
-}
-
-/* ============================
+/* =======================================================
    CARREGAR TURNOS
-============================ */
+======================================================= */
 function carregarTurnos() {
   const funcao = document.getElementById("funcao").value;
   const secao = document.getElementById("secao-turnos");
   const grade = document.getElementById("grade-turnos");
 
-  resetSelecao();
+  secao.classList.add("hidden");
   grade.innerHTML = "";
+  turnoSelecionado = null;
+  cardSelecionado = null;
+  turnosSelecionados = [];
 
-  if (!funcao) {
-    secao.classList.add("hidden");
-    return;
-  }
+  if (!funcao) return;
 
+  funcaoAtual = funcao;
   secao.classList.remove("hidden");
   grade.innerHTML = "<p>Carregando turnos...</p>";
 
@@ -64,172 +56,194 @@ function carregarTurnos() {
     .then(data => {
       grade.innerHTML = "";
 
-      if (!data?.sucesso || !Array.isArray(data.mensagem)) {
+      if (!Array.isArray(data?.mensagem)) {
         grade.innerHTML = "<p>Nenhum turno disponível</p>";
         return;
       }
 
-      let contador = 1;
-
       data.mensagem.forEach(turno => {
         const card = document.createElement("div");
         card.className = "turno-card";
+        card.dataset.turnoId = turno.turno_id;
 
-        const disponivel =
-          turno.disponivel_para_funcao === undefined
-            ? true
-            : turno.disponivel_para_funcao === true;
+        card.innerHTML = gerarConteudoCard(turno, turno.numero_turno);
 
-        if (!disponivel) card.classList.add("indisponivel");
-
-        card.innerHTML = `
-          <div class="turno-data">${formatarData(turno.data)}</div>
-          <div class="turno-numero">Turno ${contador}</div>
-          <div class="turno-hora">
-            ${formatarHora(turno.hora_inicio)} – ${formatarHora(turno.hora_fim)}
-          </div>
-          <div class="turno-periodo">${turno.periodo.toUpperCase()}</div>
-          <div class="turno-status ${disponivel ? "ok" : "bloqueado"}">
-            ${disponivel ? "Disponível" : "Indisponível"}
-          </div>
-        `;
+        const especial = turno.tipo === "abertura" || turno.tipo === "culto";
+        const disponivel = !especial && turno.disponivel_para_funcao === true;
 
         if (disponivel) {
           card.addEventListener("click", () => {
-            if (modoMultiplo) {
-              toggleTurnoMultiplo(card, turno.turno_id);
-            } else {
-              selecionarTurnoUnico(card, turno.turno_id);
-            }
+            if (modoMultiplo) toggleTurnoMultiplo(card, turno.turno_id);
+            else selecionarTurnoUnico(card, turno.turno_id);
           });
+        } else {
+          card.classList.add("indisponivel");
         }
 
         grade.appendChild(card);
-        contador++;
       });
+
+      iniciarAutoUpdate();
     });
 }
 
-/* ============================
-   MODO ÚNICO
-============================ */
-function selecionarTurnoUnico(card, turnoId) {
-  if (cardSelecionado && cardSelecionado !== card) {
-    cardSelecionado.classList.remove("selecionado");
-    const btnOld = cardSelecionado.querySelector(".btn-inscrever-card");
-    if (btnOld) btnOld.remove();
+/* =======================================================
+   FUNÇÃO ÚNICA PARA RENDERIZAR INSCRITOS  ✅
+======================================================= */
+function renderizarInscritos(inscritos = []) {
+  if (!inscritos.length) {
+    return `<div class="inscrito vazio">Nenhum inscrito</div>`;
   }
 
-  if (cardSelecionado === card) return;
+  return inscritos
+    .map(p => {
+      const funcaoFormatada = p.funcao.replace(/_/g, " ").toLowerCase();
+      return `
+        <div class="inscrito">
+          <strong>${p.nome}</strong> - <span>${funcaoFormatada}</span>
+        </div>
+      `;
+    })
+    .join("");
+}
 
+/* =======================================================
+   CARD HTML
+======================================================= */
+function gerarConteudoCard(turno, numero) {
+  const especial = turno.tipo === "abertura" || turno.tipo === "culto";
+
+  const titulo =
+    turno.tipo === "abertura"
+      ? "Abertura"
+      : turno.tipo === "culto"
+      ? "Culto"
+      : `Turno ${numero}`;
+
+  const inscritosHTML = !especial
+    ? `<div class="turno-inscritos">
+        ${renderizarInscritos(turno.inscritos)}
+       </div>`
+    : "";
+
+  const status = especial || !turno.disponivel_para_funcao
+    ? ["Indisponível", "bloqueado"]
+    : ["Disponível", "ok"];
+
+  return `
+    <div class="turno-data">${formatarData(turno.data)}</div>
+    <div class="turno-numero">${titulo}</div>
+    <div class="turno-hora">${turno.hora_inicio} – ${turno.hora_fim}</div>
+    <div class="turno-periodo">${turno.periodo.toUpperCase()}</div>
+    ${inscritosHTML}
+    <div class="turno-status ${status[1]}">${status[0]}</div>
+  `;
+}
+
+/* =======================================================
+   AUTO UPDATE — AGORA CONSISTENTE
+======================================================= */
+function iniciarAutoUpdate() {
+  clearInterval(intervaloAutoUpdate);
+
+  intervaloAutoUpdate = setInterval(() => {
+    if (!funcaoAtual) return;
+
+    fetch(`${API_URL}/?action=turnos&funcao=${encodeURIComponent(funcaoAtual)}`)
+      .then(res => res.json())
+      .then(data => {
+        data?.mensagem?.forEach(turno => {
+          const card = document.querySelector(
+            `[data-turno-id="${turno.turno_id}"]`
+          );
+          if (!card) return;
+
+          const especial = turno.tipo === "abertura" || turno.tipo === "culto";
+          const disponivel = !especial && turno.disponivel_para_funcao === true;
+
+          const statusDiv = card.querySelector(".turno-status");
+          const inscritosDiv = card.querySelector(".turno-inscritos");
+
+          statusDiv.textContent = disponivel ? "Disponível" : "Indisponível";
+          statusDiv.className = `turno-status ${
+            disponivel ? "ok" : "bloqueado"
+          }`;
+
+          card.classList.toggle("indisponivel", !disponivel);
+
+          if (!disponivel) {
+            card.querySelector(".btn-inscrever-card")?.remove();
+            card.classList.remove("selecionado");
+          }
+
+          if (inscritosDiv && !especial) {
+            inscritosDiv.innerHTML = renderizarInscritos(turno.inscritos);
+          }
+        });
+      });
+  }, 4000);
+}
+
+/* =======================================================
+   SELEÇÃO
+======================================================= */
+function selecionarTurnoUnico(card, turnoId) {
+  cardSelecionado?.classList.remove("selecionado");
+  cardSelecionado?.querySelector(".btn-inscrever-card")?.remove();
+
+  card.classList.add("selecionado");
   cardSelecionado = card;
   turnoSelecionado = turnoId;
-  card.classList.add("selecionado");
 
+  card.appendChild(criarBotaoInscricao(turnoId));
+}
+
+/* =======================================================
+   BOTÃO COM FEEDBACK VISUAL
+======================================================= */
+function criarBotaoInscricao(turnoId) {
   const btn = document.createElement("button");
   btn.className = "btn-inscrever-card";
   btn.textContent = "Enviar inscrição";
 
   btn.onclick = e => {
     e.stopPropagation();
-    enviarInscricao(turnoId);
+    enviarInscricao(turnoId, btn);
   };
 
-  card.appendChild(btn);
+  return btn;
 }
 
-/* ============================
-   MODO MÚLTIPLO
-============================ */
-function toggleTurnoMultiplo(card, turnoId) {
-  const idx = turnosSelecionados.indexOf(turnoId);
+function enviarInscricao(turnoId, btn) {
+  if (travaEnvio[turnoId]) return;
+  travaEnvio[turnoId] = true;
 
-  if (idx === -1) {
-    turnosSelecionados.push(turnoId);
-    card.classList.add("selecionado");
-  } else {
-    turnosSelecionados.splice(idx, 1);
-    card.classList.remove("selecionado");
-  }
-}
+  btn.textContent = "Inscrevendo...";
+  btn.disabled = true;
 
-/* ============================
-   ENVIO MÚLTIPLO
-============================ */
-function enviarMultiplos() {
-  const msg = document.getElementById("mensagem");
-
-  if (!turnosSelecionados.length) {
-    msg.textContent = "Selecione pelo menos um turno.";
-    msg.style.color = "red";
-    return;
-  }
-
-  const nome = document.getElementById("nome").value;
-  const telefone = document.getElementById("telefone").value;
-  const funcao = document.getElementById("funcao").value;
-
-  msg.textContent = "Enviando inscrições...";
-  msg.style.color = "black";
-
-  Promise.all(
-    turnosSelecionados.map(id =>
-      fetch(API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nome, telefone, funcao, turno_id: id })
-      })
-    )
-  ).then(() => {
-    msg.textContent = "Inscrições realizadas com sucesso!";
-    msg.style.color = "green";
-    carregarTurnos();
-  });
-}
-
-/* ============================
-   ENVIO ÚNICO
-============================ */
-function enviarInscricao(turnoId) {
-  const msg = document.getElementById("mensagem");
-  const nome = document.getElementById("nome").value;
-  const telefone = document.getElementById("telefone").value;
-  const funcao = document.getElementById("funcao").value;
-
-  if (!nome || !telefone || !funcao) {
-    msg.textContent = "Preencha todos os campos.";
-    msg.style.color = "red";
-    return;
-  }
-
-  msg.textContent = "Enviando inscrição...";
-  msg.style.color = "black";
+  const payload = {
+    nome: nome.value,
+    telefone: telefone.value,
+    funcao: funcao.value,
+    turno_id: turnoId
+  };
 
   fetch(API_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ nome, telefone, funcao, turno_id: turnoId })
+    body: JSON.stringify(payload)
   })
-    .then(res => res.json())
-    .then(() => {
-      msg.textContent = "Inscrição realizada com sucesso!";
-      msg.style.color = "green";
-      carregarTurnos();
+    .then(r => r.json())
+    .then(res => {
+      btn.textContent = res.sucesso ? "Inscrito ✓" : res.mensagem;
+      btn.style.background = res.sucesso ? "#2ecc71" : "#c0392b";
     });
 }
 
-/* ============================
-   FORMATADORES
-============================ */
-function formatarData(dataISO) {
-  const [_, mes, dia] = dataISO.split("-");
-  return `${dia}/${mes}`;
-}
-
-function formatarHora(valor) {
-  if (typeof valor === "string") return valor;
-  return `${valor.getHours().toString().padStart(2, "0")}:${valor
-    .getMinutes()
-    .toString()
-    .padStart(2, "0")}`;
+/* =======================================================
+   UTIL
+======================================================= */
+function formatarData(d) {
+  const [y, m, day] = d.split("-");
+  return `${day}/${m}`;
 }
